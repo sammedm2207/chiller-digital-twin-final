@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chiller IoT Monitoring System</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+</head>
+<body>
+
+<div class="app-shell">
+
+  <!-- ============ SIDEBAR ============ -->
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark">CH</div>
+      <div class="brand-text">
+        <div class="brand-title">Chiller IoT</div>
+        <div class="brand-sub">v1.0</div>
+      </div>
+    </div>
+
+    <nav class="nav">
+      <button class="nav-item active" data-view="dashboard">
+        <span class="nav-ico">&#9646;&#9646;&#9646;</span> Dashboard
+      </button>
+      <button class="nav-item" data-view="twin">
+        <span class="nav-ico">&#9724;</span> 3D Digital Twin
+      </button>
+      <button class="nav-item" data-view="analytics">
+        <span class="nav-ico">&#9776;</span> Analytics
+      </button>
+      <button class="nav-item" data-view="reports">
+        <span class="nav-ico">&#8595;</span> Reports
+      </button>
+      <button class="nav-item" data-view="settings">
+        <span class="nav-ico">&#9881;</span> Settings
+      </button>
+      <button class="nav-item" data-view="about">
+        <span class="nav-ico">&#8505;</span> About
+      </button>
+    </nav>
+
+    <div class="sidebar-footer">
+      <div class="mode-pill" id="modePill">-- MODE --</div>
+      <div class="sidebar-note">Mechanical &amp; Automation<br>Engineering Project</div>
+    </div>
+  </aside>
+
+  <!-- ============ MAIN ============ -->
+  <div class="main">
+
+    <!-- HEADER -->
+    <header class="topbar">
+      <div class="topbar-left">
+        <div class="inst-name" id="institutionName">WALCHAND INSTITUTE OF TECHNOLOGY</div>
+        <div class="proj-sub" id="projectSubtitle">Industrial IoT &ndash; Chiller Performance Monitoring</div>
+      </div>
+      <div class="topbar-right">
+        <div class="status-chip" id="backendChip">
+          <span class="dot dot-green"></span> BACKEND: <b>ONLINE</b>
+        </div>
+        <div class="status-chip" id="esp32Chip">
+          <span class="dot dot-red"></span> ESP32: <b>DISCONNECTED</b>
+        </div>
+        <div class="clock" id="clock">--:--:--</div>
+      </div>
+    </header>
+
+    <div class="last-update-row">
+      Last update: <span id="lastUpdate">--:--:--</span>
+      <span class="sep">|</span>
+      Machine status: <span id="machineStatus" class="badge badge-neutral">--</span>
+    </div>
+
+    <!-- ============ DASHBOARD VIEW ============ -->
+    <section class="view active" id="view-dashboard">
+
+      <div class="grid-top">
+
+        <div class="panel" id="machineInfoPanel">
+          <div class="panel-title">Machine Information</div>
+          <div class="info-grid" id="machineInfoGrid"><!-- filled by JS --></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-title">Performance</div>
+          <div class="perf-grid" id="perfGrid">
+            <div class="perf-card">
+              <div class="perf-label">COP <span class="tag" id="copTag">CALC</span></div>
+              <div class="perf-value" id="copValue">N/A</div>
+            </div>
+            <div class="perf-card">
+              <div class="perf-label">Cooling Capacity <span class="tag" id="capTag">CALC</span></div>
+              <div class="perf-value" id="capValue">N/A</div>
+            </div>
+            <div class="perf-card">
+              <div class="perf-label">Water &Delta;T</div>
+              <div class="perf-value" id="dtValue">N/A</div>
+            </div>
+            <div class="perf-card">
+              <div class="perf-label">Electrical Power</div>
+              <div class="perf-value" id="powerValue">N/A</div>
+            </div>
+            <div class="perf-card">
+              <div class="perf-label">Flow Rate</div>
+              <div class="perf-value" id="flowValue">N/A</div>
+            </div>
+            <div class="perf-card">
+              <div class="perf-label">Compressor</div>
+              <div class="perf-value" id="compValue">--</div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <div class="panel">
+        <div class="panel-title">Live Temperature Monitoring</div>
+        <div class="temp-grid" id="tempGrid"><!-- filled by JS --></div>
+      </div>
+
+      <div class="grid-two">
+        <div class="panel">
+          <div class="panel-title">Live VCC Chiller Circuit Flow Animation</div>
+          <div id="vccWrap"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-title">Chilled Water Flow</div>
+          <div id="waterWrap"></div>
+        </div>
+      </div>
+
+      <div class="grid-two">
+        <div class="panel">
+          <div class="panel-title-row">
+            <div class="panel-title">Live Temperature Graph</div>
+            <div class="range-buttons" id="liveRangeButtons">
+              <button data-range="1min" class="active">1 min</button>
+              <button data-range="5min">5 min</button>
+              <button data-range="15min">15 min</button>
+              <button data-range="1hour">1 hour</button>
+            </div>
+          </div>
+          <canvas id="liveTempChart" height="120"></canvas>
+        </div>
+
+        <div class="panel">
+          <div class="panel-title">Alarm Panel</div>
+          <div class="alarm-list" id="alarmList">
+            <div class="alarm-empty">No active alarms &mdash; system normal</div>
+          </div>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- ============ 3D DIGITAL TWIN VIEW ============ -->
+    <section class="view" id="view-twin">
+      <div class="panel twin-panel">
+        <div class="panel-title-row">
+          <div class="panel-title">3D Digital Twin &mdash; Water Chiller</div>
+          <div class="twin-legend">
+            <span class="legend-item"><span class="legend-swatch swatch-water"></span> Chilled Water Flow</span>
+            <span class="legend-item"><span class="legend-swatch swatch-refrigerant"></span> Refrigerant Flow</span>
+          </div>
+        </div>
+
+        <div class="twin-toolbar" id="twinToolbar">
+          <div class="twin-toolbar-group">
+            <button data-action="reset">Reset View</button>
+            <button data-action="front">Front View</button>
+            <button data-action="top">Top View</button>
+            <button data-action="side">Side View</button>
+            <button data-action="fit">Fit Model</button>
+          </div>
+          <div class="twin-toolbar-group">
+            <button data-action="cutaway" id="btnCutaway">Cutaway</button>
+            <button data-action="showInternal">Show Internal</button>
+            <button data-action="showExternal">Show External</button>
+          </div>
+          <div class="twin-toolbar-group">
+            <button data-action="toggleWater" class="toggle-on" id="btnToggleWater">Water Flow</button>
+            <button data-action="toggleRefrigerant" class="toggle-on" id="btnToggleRefrigerant">Refrigerant Flow</button>
+            <button data-action="toggleLabels" class="toggle-on" id="btnToggleLabels">Labels</button>
+          </div>
+          <div class="twin-toolbar-group">
+            <button data-action="followWater" id="btnFollowWater">&#9654; Follow Water Flow</button>
+            <button data-action="followRefrigerant" id="btnFollowRefrigerant">&#9654; Follow Refrigerant</button>
+            <button data-action="presentation" id="btnPresentation">&#9654; Presentation Mode</button>
+            <button data-action="arview" id="btnArView">AR View</button>
+          </div>
+        </div>
+
+        <div class="twin-stage" id="twinStage">
+          <div id="twinCanvasWrap" class="twin-canvas-wrap"></div>
+          <div id="twinLoading" class="twin-loading">Loading 3D engine&hellip;</div>
+          <div id="twinInfoPanel" class="twin-info-panel hidden">
+            <button class="twin-info-close" id="twinInfoClose">&times;</button>
+            <div class="twin-info-title" id="twinInfoTitle">--</div>
+            <div class="twin-info-body" id="twinInfoBody"></div>
+          </div>
+          <div id="twinSequenceBanner" class="twin-sequence-banner hidden">
+            <div class="twin-seq-step" id="twinSeqStep">--</div>
+            <div class="twin-seq-text" id="twinSeqText"></div>
+          </div>
+        </div>
+
+        <div class="twin-readout-grid" id="twinReadoutGrid"><!-- filled by JS --></div>
+        <p class="hint-text">Drag to orbit &middot; scroll/pinch to zoom &middot; right-drag to pan &middot; click a component (compressor, condenser, expansion valve, evaporator, water inlet/outlet, load) for details.</p>
+      </div>
+    </section>
+
+    <!-- ============ ANALYTICS VIEW ============ -->
+    <section class="view" id="view-analytics">
+      <div class="panel-title-row">
+        <div class="panel-title">Analytics</div>
+        <div class="range-buttons" id="analyticsRangeButtons">
+          <button data-range="1hour" class="active">1 hour</button>
+          <button data-range="24hour">24 hour</button>
+          <button data-range="7day">7 day</button>
+          <button data-range="30day">30 day</button>
+        </div>
+      </div>
+
+      <div class="grid-two">
+        <div class="panel"><div class="panel-title">COP vs Time</div><canvas id="chartCOP" height="140"></canvas></div>
+        <div class="panel"><div class="panel-title">Cooling Capacity vs Time</div><canvas id="chartCap" height="140"></canvas></div>
+      </div>
+      <div class="grid-two">
+        <div class="panel"><div class="panel-title">Power vs Time</div><canvas id="chartPower" height="140"></canvas></div>
+        <div class="panel"><div class="panel-title">Water &Delta;T vs Time</div><canvas id="chartDT" height="140"></canvas></div>
+      </div>
+      <div class="panel"><div class="panel-title">Temperature Trends</div><canvas id="chartTemps" height="140"></canvas></div>
+    </section>
+
+    <!-- ============ REPORTS VIEW ============ -->
+    <section class="view" id="view-reports">
+      <div class="panel">
+        <div class="panel-title">Download Historical Data (Excel)</div>
+        <div class="report-buttons">
+          <button class="btn" data-range="today">DOWNLOAD TODAY</button>
+          <button class="btn" data-range="24hour">DOWNLOAD 24 HOURS</button>
+          <button class="btn" data-range="7day">DOWNLOAD 7 DAYS</button>
+          <button class="btn" data-range="30day">DOWNLOAD 30 DAYS</button>
+        </div>
+        <div class="custom-range">
+          <label>Custom range:</label>
+          <input type="datetime-local" id="customStart">
+          <span>to</span>
+          <input type="datetime-local" id="customEnd">
+          <button class="btn" id="btnCustomDownload">DOWNLOAD CUSTOM</button>
+        </div>
+        <p class="hint-text">Excel files include a formatted data sheet and a summary sheet (average/min/max COP, cooling capacity, power, and more).</p>
+      </div>
+
+      <div class="panel">
+        <div class="panel-title">Recent Records</div>
+        <div class="table-wrap">
+          <table class="data-table" id="recentTable">
+            <thead>
+              <tr>
+                <th>Time</th><th>T1</th><th>T2</th><th>T3</th><th>T4</th><th>T5</th><th>T6</th>
+                <th>Flow</th><th>Power</th><th>Cap.</th><th>&Delta;T</th><th>COP</th>
+              </tr>
+            </thead>
+            <tbody id="recentTableBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ SETTINGS VIEW ============ -->
+    <section class="view" id="view-settings">
+      <div class="panel">
+        <div class="panel-title">Machine Information</div>
+        <div class="info-grid" id="settingsMachineInfo"></div>
+      </div>
+      <div class="grid-two">
+        <div class="panel">
+          <div class="panel-title">Sensor Channel Mapping</div>
+          <div class="mapping-list" id="settingsSensorMap"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-title">Alarm Thresholds</div>
+          <div class="mapping-list" id="settingsThresholds"></div>
+        </div>
+      </div>
+      <div class="grid-two">
+        <div class="panel">
+          <div class="panel-title">Calculation Constants</div>
+          <div class="mapping-list" id="settingsConstants"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-title">Demo Mode</div>
+          <p class="hint-text">Use demo mode for presentations when no real ESP32 is connected. Demo mode turns off automatically the instant real ESP32 data arrives.</p>
+          <label class="switch-row">
+            <span>Force Demo Mode</span>
+            <input type="checkbox" id="demoToggle">
+          </label>
+        </div>
+      </div>
+      <p class="hint-text">Edit <code>config.py</code> to permanently change machine info, sensor labels, thresholds, or constants.</p>
+    </section>
+
+    <!-- ============ ABOUT VIEW ============ -->
+    <section class="view" id="view-about">
+      <div class="panel about-panel">
+        <div class="panel-title">About This Project</div>
+        <p><b>Project:</b> Real-Time Chiller Monitoring and Performance Analysis</p>
+        <p><b>Institution:</b> Walchand Institute of Technology</p>
+        <p><b>Technology stack:</b> ESP32, Python Flask, SQLite, HTML, CSS, JavaScript, Server-Sent Events, Chart.js</p>
+        <p><b>Purpose:</b> Real-time monitoring and performance analysis of a refrigeration/chiller system, including live sensor visualization, real coefficient-of-performance (COP) calculation, industrial-style alarm handling, and historical Excel reporting &mdash; built for a mechanical engineering capstone project.</p>
+      </div>
+    </section>
+
+  </div>
+</div>
+
+<script src="{{ url_for('static', filename='js/chiller3d.js') }}"></script>
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
