@@ -318,8 +318,9 @@ def api_stream():
             # Send an immediate snapshot so the UI has data right away
             with STATE_LOCK:
                 snapshot = STATE["last_reading"]
+                snapshot_alarms = list(STATE["active_alarms"])
             if snapshot:
-                yield f"data: {json.dumps({'type': 'reading', 'data': snapshot, 'alarms': STATE['active_alarms']})}\n\n"
+                yield f"data: {json.dumps({'type': 'reading', 'data': snapshot, 'alarms': snapshot_alarms})}\n\n"
             while True:
                 try:
                     data = q.get(timeout=15)
@@ -335,6 +336,7 @@ def api_stream():
     return Response(gen(), mimetype="text/event-stream", headers={
         "Cache-Control": "no-cache",
         "X-Accel-Buffering": "no",
+        "Connection": "keep-alive",
     })
 
 

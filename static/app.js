@@ -18,12 +18,28 @@ let liveChart = null;           // Chart.js instance for the dashboard live grap
 let liveRange = "1min";
 let analyticsRange = "1hour";
 let analyticsCharts = {};       // { COP: chart, Cap: chart, Power: chart, DT: chart, Temps: chart }
+let newestReadingTimestamp = "";
+let sseRetryTimer = null;
 
 const SENSOR_KEYS = ["T1", "T2", "T3", "T4", "T5", "T6"];
 const SENSOR_COLORS = {
   T1: "#38d4e0", T2: "#ef4a5f", T3: "#f2b705",
   T4: "#33d17a", T5: "#3b82f6", T6: "#a78bfa",
 };
+
+const ANALYTICS_THRESHOLDS = {
+  cop: { efficient: 5.0, good: 4.0, low: 3.0 },
+  cooling_capacity: { normal: 45, reduced: 30 },
+  power_kw: { normal: 11.0, high: 13.0 },
+  delta_t: { high: 8.0, low: 4.5, normal: 6.0 },
+};
+
+const ANALYTICS_TEMP_SERIES = [
+  { key: "T5", label: "Entering Water", color: "#3b82f6" },
+  { key: "T6", label: "Leaving Water", color: "#38d4e0" },
+  { key: "T3", label: "Condenser", color: "#33d17a" },
+  { key: "T1", label: "Compressor Suction", color: "#f2b705" },
+];
 
 /* ---------------------------------------------------------
    INIT
@@ -368,22 +384,41 @@ function updateWaterFlow(reading) {
    SSE — real time updates
 --------------------------------------------------------- */
 function connectSSE() {
+  if (sseRetryTimer) {
+    clearTimeout(sseRetryTimer);
+    sseRetryTimer = null;
+  }
+
   const es = new EventSource(API.stream);
   es.onmessage = (evt) => {
     if (!evt.data || evt.data.startsWith(":")) return;
     try {
       const payload = JSON.parse(evt.data);
       if (payload.type === "reading") {
-        renderReading(payload.data, payload.alarms || []);
-        pushLivePoint(payload.data);
+        if (acceptReading(payload.data)) {
+          renderReading(payload.data, payload.alarms || []);
+          pushLivePoint(payload.data);
+        }
       }
     } catch (e) {
       console.error("SSE parse error", e);
     }
   };
   es.onerror = () => {
-    // browser auto-reconnects EventSource; nothing else needed
+    // Replace dropped connections so a stale EventSource cannot linger.
+    es.close();
+    if (!sseRetryTimer) {
+      sseRetryTimer = setTimeout(() => connectSSE(), 2000);
+    }
   };
+}
+
+function acceptReading(reading) {
+  if (!reading) return false;
+  const timestamp = reading.timestamp || "";
+  if (timestamp && newestReadingTimestamp && timestamp < newestReadingTimestamp) return false;
+  if (timestamp) newestReadingTimestamp = timestamp;
+  return true;
 }
 
 /* ---------------------------------------------------------
@@ -500,7 +535,7 @@ async function refreshLatest() {
     setChip("backendChip", true, "BACKEND", "ONLINE");
     setChip("esp32Chip", data.esp32_status === "CONNECTED", "ESP32", data.esp32_status);
 
-    if (data.reading) {
+    if (data.reading && acceptReading(data.reading)) {
       renderReading(data.reading, data.alarms || []);
     }
   } catch (e) {
@@ -565,6 +600,301 @@ function chartOptions() {
   };
 }
 
+function hexToRgba(hex, alpha) {
+  if (!hex || !hex.startsWith("#")) return `rgba(56, 212, 224, ${alpha})`;
+  const clean = hex.replace("#", "");
+  const full = clean.length === 3 ? clean.split("").map((ch) => ch + ch).join("") : clean;
+  const num = Number.parseInt(full, 16);
+  const r = (num >> 16) & 255;
+  const g = (num >> 8) & 255;
+  const b = num & 255;
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+function safeNumber(value) {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
+}
+
+function formatMetricValue(value, unit, digits = 2) {
+  if (value === null || value === undefined || Number.isNaN(value)) return "N/A";
+  const num = Number(value);
+  if (!Number.isFinite(num)) return "N/A";
+  const formatted = num.toFixed(digits);
+  return unit ? `${formatted} ${unit}` : formatted;
+}
+
+function formatMetricNumber(value, digits = 2) {
+  if (value === null || value === undefined || Number.isNaN(value)) return "N/A";
+  const num = Number(value);
+  if (!Number.isFinite(num)) return "N/A";
+  return num.toFixed(digits);
+}
+
+function formatAnalyticsDate(dateValue, range) {
+  const dt = new Date(dateValue);
+  if (Number.isNaN(dt.getTime())) return "--";
+  const timeFormatter = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false });
+  const dayFormatter = new Intl.DateTimeFormat("en-GB", { weekday: "short" });
+  const shortDateFormatter = new Intl.DateTimeFormat("en-GB", { month: "short", day: "numeric" });
+
+  if (range === "1hour" || range === "24hour") return timeFormatter.format(dt);
+  if (range === "7day") return dayFormatter.format(dt);
+  if (range === "30day") return shortDateFormatter.format(dt);
+  return timeFormatter.format(dt);
+}
+
+function getMetricStats(rows, key, digits = 2) {
+  const values = rows
+    .map((row) => safeNumber(row?.[key]))
+    .filter((v) => v !== null);
+
+  if (!values.length) {
+    return { current: null, avg: null, min: null, max: null, trendPct: null, changeLabel: "--" };
+  }
+
+  const current = values[values.length - 1];
+  const avg = values.reduce((sum, v) => sum + v, 0) / values.length;
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+
+  let trendPct = null;
+  if (values.length > 1) {
+    const prior = values[values.length - 2];
+    if (prior !== 0) {
+      trendPct = ((current - prior) / Math.abs(prior)) * 100;
+    }
+  }
+
+  return {
+    current,
+    avg,
+    min,
+    max,
+    trendPct,
+    currentLabel: formatMetricNumber(current, digits),
+    avgLabel: formatMetricNumber(avg, digits),
+    minLabel: formatMetricNumber(min, digits),
+    maxLabel: formatMetricNumber(max, digits),
+    changeLabel: trendPct === null ? "--" : `${trendPct >= 0 ? "▲" : "▼"} ${Math.abs(trendPct).toFixed(1)}%`,
+  };
+}
+
+function getOperatingCondition(key, value) {
+  if (key === "cop") {
+    if (value >= ANALYTICS_THRESHOLDS.cop.efficient) return "Efficient";
+    if (value >= ANALYTICS_THRESHOLDS.cop.good) return "Good";
+    return "Low";
+  }
+  if (key === "cooling_capacity") {
+    if (value >= ANALYTICS_THRESHOLDS.cooling_capacity.normal) return "Normal";
+    if (value >= ANALYTICS_THRESHOLDS.cooling_capacity.reduced) return "Reduced";
+    return "Low";
+  }
+  if (key === "power_kw") {
+    if (value >= ANALYTICS_THRESHOLDS.power_kw.high) return "High";
+    return "Normal";
+  }
+  if (key === "delta_t") {
+    if (value >= ANALYTICS_THRESHOLDS.delta_t.high) return "High";
+    if (value <= ANALYTICS_THRESHOLDS.delta_t.low) return "Low";
+    return "Normal";
+  }
+  return "Normal";
+}
+
+function renderAnalyticsStatusIndicator(isDemoMode) {
+  const el = document.getElementById("analyticsStatus");
+  if (!el) return;
+  const active = isDemoMode ? "dot-yellow" : "dot-green";
+  const label = isDemoMode ? "Demo Data" : "Live Data";
+  el.innerHTML = `<span class="dot ${active}"></span> ${label}`;
+}
+
+function renderAnalyticsKpis(rows) {
+  const grid = document.getElementById("analyticsKpiGrid");
+  if (!grid) return;
+
+  const metrics = [
+    { id: "cop", key: "cop", label: "Current COP", unit: "COP", digits: 2, suffix: "COP" },
+    { id: "capacity", key: "cooling_capacity", label: "Current Cooling Capacity", unit: "kW", digits: 1, suffix: "kW" },
+  ];
+
+  const cards = metrics.map((metric) => {
+    const stats = getMetricStats(rows, metric.key, metric.digits);
+    const current = stats.current ?? null;
+    let trend = "--";
+    let trendClass = "neutral";
+    if (stats.trendPct !== null) {
+      trend = `${stats.trendPct >= 0 ? "▲" : "▼"} ${Math.abs(stats.trendPct).toFixed(1)}%`;
+      trendClass = stats.trendPct >= 0 ? "up" : "down";
+    }
+
+    const valueText = current === null ? "N/A" : formatMetricNumber(current, metric.digits);
+    const unitText = metric.unit && current !== null ? metric.unit : "";
+    return `
+      <div class="analytics-kpi-card">
+        <div class="analytics-kpi-value">${valueText}<span>${unitText}</span></div>
+        <div class="analytics-kpi-label">${metric.label}</div>
+        <div class="analytics-kpi-trend ${trendClass}">${trend}</div>
+      </div>
+    `;
+  }).join("");
+
+  grid.innerHTML = cards;
+}
+
+function renderAnalyticsSummary(rows) {
+  const formatSummary = (metricKey, unit, digits = 2, suffixText = "") => {
+    const stats = getMetricStats(rows, metricKey, digits);
+    const current = stats.current;
+    const targetId = `${metricKey}CurrentValue`;
+    const metaId = `${metricKey}MetaValue`;
+
+    const currentEl = document.getElementById(targetId);
+    const metaEl = document.getElementById(metaId);
+    if (!currentEl || !metaEl) return;
+
+    if (current === null) {
+      currentEl.innerHTML = `N/A<span>${suffixText}</span>`;
+      metaEl.textContent = "Avg N/A • Min N/A • Max N/A";
+      return;
+    }
+
+    const currentText = formatMetricNumber(current, digits);
+    currentEl.innerHTML = `${currentText}<span>${suffixText || unit}</span>`;
+    metaEl.textContent = `Avg ${formatMetricNumber(stats.avg, digits)} ${unit} • Min ${formatMetricNumber(stats.min, digits)} ${unit} • Max ${formatMetricNumber(stats.max, digits)} ${unit}`;
+  };
+
+  formatSummary("cop", "COP", 2, "COP");
+  formatSummary("cooling_capacity", "kW", 1, "kW");
+  formatSummary("power_kw", "kW", 1, "kW");
+  formatSummary("delta_t", "°C", 1, "°C");
+}
+
+function buildOrUpdateChart(key, canvasId, labels, series, chartConfig = {}) {
+  const ctx = document.getElementById(canvasId)?.getContext("2d");
+  if (!ctx) return;
+
+  const datasets = series.map((s) => ({
+    label: s.label,
+    data: s.data,
+    borderColor: s.color,
+    backgroundColor: chartConfig.fill !== false ? hexToRgba(s.color, 0.18) : "transparent",
+    borderWidth: 2.6,
+    tension: 0.32,
+    fill: chartConfig.fill !== false,
+    pointRadius: 0,
+    pointHoverRadius: 4,
+    pointHitRadius: 14,
+    pointBackgroundColor: s.color,
+    pointBorderColor: "#0b1420",
+    pointBorderWidth: 1.5,
+    borderJoinStyle: "round",
+    cubicInterpolationMode: "monotone",
+  }));
+
+  const options = getAnalyticsChartOptions(chartConfig);
+
+  if (analyticsCharts[key]) {
+    analyticsCharts[key].data.labels = labels;
+    analyticsCharts[key].data.datasets = datasets;
+    analyticsCharts[key].options = options;
+    analyticsCharts[key].update();
+    return;
+  }
+
+  analyticsCharts[key] = new Chart(ctx, {
+    type: "line",
+    data: { labels, datasets },
+    options,
+  });
+}
+
+function getAnalyticsChartOptions(config = {}) {
+  return {
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: { duration: 260, easing: "easeOutCubic" },
+    interaction: { mode: "nearest", intersect: false },
+    elements: { line: { capBezierPoints: true } },
+    scales: {
+      x: {
+        grid: { color: "rgba(158, 176, 196, 0.06)", drawBorder: false },
+        border: { display: false },
+        ticks: {
+          color: "#7d90a6",
+          maxTicksLimit: 6,
+          autoSkip: true,
+          callback: (value, index, ticks) => formatAnalyticsDate(ticks[index]?.label || value, config.range || "1hour"),
+        },
+      },
+      y: {
+        beginAtZero: false,
+        grace: "8%",
+        grid: { color: "rgba(158, 176, 196, 0.08)", drawBorder: false },
+        border: { display: false },
+        ticks: { color: "#7d90a6", maxTicksLimit: 6, callback: (value) => Number(value).toFixed(config.digits ?? 1) },
+        title: {
+          display: !!config.yTitle,
+          text: config.yTitle,
+          color: "#9fb3c8",
+          font: { size: 11, weight: "600" },
+        },
+      },
+    },
+    plugins: {
+      legend: {
+        display: config.legend === true,
+        position: "top",
+        align: "start",
+        labels: {
+          color: "#9fb3c8",
+          boxWidth: 12,
+          boxHeight: 12,
+          usePointStyle: true,
+          pointStyle: "circle",
+          font: { size: 10.5 },
+          padding: 14,
+        },
+      },
+      tooltip: {
+        backgroundColor: "rgba(7, 12, 18, 0.96)",
+        titleColor: "#eaf3fb",
+        bodyColor: "#dfeaf8",
+        borderColor: "rgba(56, 212, 224, 0.32)",
+        borderWidth: 1,
+        displayColors: true,
+        padding: 10,
+        cornerRadius: 8,
+        titleMarginBottom: 6,
+        callbacks: {
+          title: (items) => {
+            if (!items?.length) return "";
+            const raw = items[0].label;
+            return raw ? new Date(raw).toLocaleString("en-GB", {
+              day: "2-digit",
+              month: "short",
+              year: "numeric",
+              hour: "2-digit",
+              minute: "2-digit",
+              second: "2-digit",
+              hour12: false,
+            }) : "";
+          },
+          label: (ctx) => {
+            const unit = config.unit || "";
+            const value = safeNumber(ctx.parsed.y);
+            const status = config.conditionKey && value !== null ? getOperatingCondition(config.conditionKey, value) : "Normal";
+            const valueText = value === null ? "N/A" : Number(value).toFixed(config.digits ?? 2);
+            return [`${ctx.dataset.label}: ${valueText}${unit ? ` ${unit}` : ""}`, `Status: ${status}`];
+          },
+        },
+      },
+    },
+  };
+}
+
 function setupLiveRangeButtons() {
   document.querySelectorAll("#liveRangeButtons button").forEach((btn) => {
     btn.addEventListener("click", async () => {
@@ -618,37 +948,27 @@ function setupAnalyticsRangeButtons() {
 async function loadAnalytics() {
   const res = await fetch(`${API.history}?range=${analyticsRange}&limit=5000`);
   const data = await res.json();
-  const rows = data.rows;
-  const labels = rows.map((r) => new Date(r.timestamp).toLocaleString("en-GB"));
+  const rows = data.rows || [];
+  const labels = rows.map((r) => r.timestamp);
 
-  buildOrUpdateChart("COP", "chartCOP", labels, [{ label: "COP", data: rows.map((r) => r.cop), color: "#38d4e0" }]);
-  buildOrUpdateChart("Cap", "chartCap", labels, [{ label: "Cooling Capacity (kW)", data: rows.map((r) => r.cooling_capacity), color: "#33d17a" }]);
-  buildOrUpdateChart("Power", "chartPower", labels, [{ label: "Power (kW)", data: rows.map((r) => r.power_kw), color: "#f2b705" }]);
-  buildOrUpdateChart("DT", "chartDT", labels, [{ label: "Water ΔT (°C)", data: rows.map((r) => r.delta_t), color: "#3b82f6" }]);
-  buildOrUpdateChart("Temps", "chartTemps", labels, SENSOR_KEYS.map((k) => ({
-    label: k, data: rows.map((r) => r[k]), color: SENSOR_COLORS[k],
-  })));
-}
+  renderAnalyticsKpis(rows);
+  renderAnalyticsSummary(rows);
 
-function buildOrUpdateChart(key, canvasId, labels, series) {
-  if (analyticsCharts[key]) {
-    analyticsCharts[key].data.labels = labels;
-    analyticsCharts[key].data.datasets.forEach((ds, i) => { ds.data = series[i].data; });
-    analyticsCharts[key].update();
-    return;
-  }
-  const ctx = document.getElementById(canvasId).getContext("2d");
-  analyticsCharts[key] = new Chart(ctx, {
-    type: "line",
-    data: {
-      labels,
-      datasets: series.map((s) => ({
-        label: s.label, data: s.data, borderColor: s.color, backgroundColor: "transparent",
-        borderWidth: 2, pointRadius: 0, tension: 0.25,
-      })),
-    },
-    options: chartOptions(),
+  buildOrUpdateChart("COP", "chartCOP", labels, [{ label: "COP", data: rows.map((r) => r.cop), color: "#38d4e0" }], {
+    range: analyticsRange, yTitle: "COP", unit: "COP", digits: 2, fill: true, conditionKey: "cop", singleMetric: true,
   });
+  buildOrUpdateChart("Cap", "chartCap", labels, [{ label: "Cooling Capacity", data: rows.map((r) => r.cooling_capacity), color: "#33d17a" }], {
+    range: analyticsRange, yTitle: "kW", unit: "kW", digits: 1, fill: true, conditionKey: "cooling_capacity", singleMetric: true,
+  });
+  buildOrUpdateChart("Temps", "chartTemps", labels, ANALYTICS_TEMP_SERIES.map((s) => ({
+    label: s.label, data: rows.map((r) => r[s.key]), color: s.color,
+  })), {
+    range: analyticsRange, yTitle: "°C", unit: "°C", digits: 1, fill: false, legend: true, singleMetric: false,
+  });
+
+  const currentSummary = rows.length ? rows[rows.length - 1] : null;
+  const isDemo = Boolean(CFG?.demo_mode || (currentSummary && currentSummary.mode === "DEMO"));
+  renderAnalyticsStatusIndicator(isDemo);
 }
 
 /* ---------------------------------------------------------

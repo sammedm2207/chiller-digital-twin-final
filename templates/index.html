@@ -214,25 +214,63 @@
 
     <!-- ============ ANALYTICS VIEW ============ -->
     <section class="view" id="view-analytics">
-      <div class="panel-title-row">
-        <div class="panel-title">Analytics</div>
-        <div class="range-buttons" id="analyticsRangeButtons">
-          <button data-range="1hour" class="active">1 hour</button>
-          <button data-range="24hour">24 hour</button>
-          <button data-range="7day">7 day</button>
-          <button data-range="30day">30 day</button>
+      <div class="analytics-header">
+        <div class="analytics-heading">
+          <h2 class="analytics-title">Chiller Analytics</h2>
+          <div class="analytics-subtitle">Performance trends and operating efficiency</div>
+        </div>
+        <div class="analytics-header-tools">
+          <div class="analytics-status" id="analyticsStatus"><span class="dot dot-green"></span> Live Data</div>
+          <div class="range-buttons" id="analyticsRangeButtons">
+            <button data-range="1hour" class="active">1 hour</button>
+            <button data-range="24hour">24 hour</button>
+            <button data-range="7day">7 day</button>
+            <button data-range="30day">30 day</button>
+          </div>
         </div>
       </div>
 
+      <div class="analytics-kpi-grid" id="analyticsKpiGrid"></div>
+
       <div class="grid-two">
-        <div class="panel"><div class="panel-title">COP vs Time</div><canvas id="chartCOP" height="140"></canvas></div>
-        <div class="panel"><div class="panel-title">Cooling Capacity vs Time</div><canvas id="chartCap" height="140"></canvas></div>
+        <div class="panel analytics-panel">
+          <div class="chart-card-header">
+            <div class="chart-heading">
+              <div class="chart-title">Coefficient of Performance</div>
+              <div class="chart-subtitle">COP trend</div>
+            </div>
+            <div class="chart-summary">
+              <div class="summary-value" id="copCurrentValue">--</div>
+              <div class="summary-meta" id="copMetaValue">Avg -- • Min -- • Max --</div>
+            </div>
+          </div>
+          <canvas id="chartCOP" height="180"></canvas>
+        </div>
+
+        <div class="panel analytics-panel">
+          <div class="chart-card-header">
+            <div class="chart-heading">
+              <div class="chart-title">Cooling Capacity</div>
+              <div class="chart-subtitle">Cooling output trend</div>
+            </div>
+            <div class="chart-summary">
+              <div class="summary-value" id="cooling_capacityCurrentValue">--</div>
+              <div class="summary-meta" id="cooling_capacityMetaValue">Avg -- • Min -- • Max --</div>
+            </div>
+          </div>
+          <canvas id="chartCap" height="180"></canvas>
+        </div>
       </div>
-      <div class="grid-two">
-        <div class="panel"><div class="panel-title">Power vs Time</div><canvas id="chartPower" height="140"></canvas></div>
-        <div class="panel"><div class="panel-title">Water &Delta;T vs Time</div><canvas id="chartDT" height="140"></canvas></div>
+
+      <div class="panel analytics-panel temp-panel">
+        <div class="chart-card-header">
+          <div class="chart-heading">
+            <div class="chart-title">Temperature Trends</div>
+            <div class="chart-subtitle">Water and thermal performance profile</div>
+          </div>
+        </div>
+        <canvas id="chartTemps" height="210"></canvas>
       </div>
-      <div class="panel"><div class="panel-title">Temperature Trends</div><canvas id="chartTemps" height="140"></canvas></div>
     </section>
 
     <!-- ============ REPORTS VIEW ============ -->
@@ -319,6 +357,6 @@
 </div>
 
 <script src="{{ url_for('static', filename='js/chiller3d.js') }}"></script>
-<script src="{{ url_for('static', filename='app.js') }}"></script>
+<script src="{{ url_for('static', filename='app.js', v='2') }}"></script>
 </body>
 </html>
