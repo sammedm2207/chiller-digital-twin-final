@@ -13,11 +13,9 @@ Run with:
 
 import json
 import math
-import random
 import sqlite3
 import threading
-import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from queue import Queue, Empty
 
@@ -36,7 +34,7 @@ STATE = {
     "last_reading": None,       # most recent processed reading (dict)
     "last_esp32_time": None,    # datetime of last REAL esp32 packet
     "demo_mode": config.DEMO_MODE_DEFAULT,
-    "server_start_time": datetime.now(),
+    "server_start_time": datetime.now(timezone.utc),
     "active_alarms": [],        # list of current alarm dicts
 }
 
@@ -193,44 +191,46 @@ def evaluate_alarms(clean, cop):
     """Return a list of alarm dicts based on config.ALARM_THRESHOLDS."""
     th = config.ALARM_THRESHOLDS
     alarms = []
-    now_str = datetime.now().strftime("%H:%M:%S")
+    now_utc = datetime.now(timezone.utc)
+    now_str = now_utc.strftime("%H:%M:%S")
+    timestamp = now_utc.isoformat(timespec="seconds").replace("+00:00", "Z")
 
     t2 = clean.get("T2")
     if t2 is not None:
         if t2 > th["T2_CRITICAL"]:
-            alarms.append(_alarm("CRITICAL", "High Compressor Discharge Temperature", f"{t2:.1f} °C", now_str))
+            alarms.append(_alarm("CRITICAL", "High Compressor Discharge Temperature", f"{t2:.1f} °C", now_str, timestamp))
         elif t2 > th["T2_WARNING"]:
-            alarms.append(_alarm("WARNING", "High Compressor Discharge Temperature", f"{t2:.1f} °C", now_str))
+            alarms.append(_alarm("WARNING", "High Compressor Discharge Temperature", f"{t2:.1f} °C", now_str, timestamp))
 
     t3 = clean.get("T3")
     if t3 is not None:
         if t3 > th["T3_CRITICAL"]:
-            alarms.append(_alarm("CRITICAL", "High Condenser Outlet Temperature", f"{t3:.1f} °C", now_str))
+            alarms.append(_alarm("CRITICAL", "High Condenser Outlet Temperature", f"{t3:.1f} °C", now_str, timestamp))
         elif t3 > th["T3_WARNING"]:
-            alarms.append(_alarm("WARNING", "High Condenser Outlet Temperature", f"{t3:.1f} °C", now_str))
+            alarms.append(_alarm("WARNING", "High Condenser Outlet Temperature", f"{t3:.1f} °C", now_str, timestamp))
 
     flow = clean.get("flow_rate")
     if flow is not None:
         if flow < th["LOW_FLOW_CRITICAL"]:
-            alarms.append(_alarm("CRITICAL", "Low Chilled Water Flow", f"{flow:.1f} L/min", now_str))
+            alarms.append(_alarm("CRITICAL", "Low Chilled Water Flow", f"{flow:.1f} L/min", now_str, timestamp))
         elif flow < th["LOW_FLOW_WARNING"]:
-            alarms.append(_alarm("WARNING", "Low Chilled Water Flow", f"{flow:.1f} L/min", now_str))
+            alarms.append(_alarm("WARNING", "Low Chilled Water Flow", f"{flow:.1f} L/min", now_str, timestamp))
 
     if cop is not None and cop < th["LOW_COP_WARNING"]:
-        alarms.append(_alarm("WARNING", "Low Coefficient of Performance", f"{cop:.2f}", now_str))
+        alarms.append(_alarm("WARNING", "Low Coefficient of Performance", f"{cop:.2f}", now_str, timestamp))
 
     power = clean.get("power_kw")
     if power is not None:
         if power > th["HIGH_POWER_CRITICAL"]:
-            alarms.append(_alarm("CRITICAL", "High Electrical Power Draw", f"{power:.2f} kW", now_str))
+            alarms.append(_alarm("CRITICAL", "High Electrical Power Draw", f"{power:.2f} kW", now_str, timestamp))
         elif power > th["HIGH_POWER_WARNING"]:
-            alarms.append(_alarm("WARNING", "High Electrical Power Draw", f"{power:.2f} kW", now_str))
+            alarms.append(_alarm("WARNING", "High Electrical Power Draw", f"{power:.2f} kW", now_str, timestamp))
 
     return alarms
 
 
-def _alarm(severity, message, value, time_str):
-    return {"severity": severity, "message": message, "value": value, "time": time_str}
+def _alarm(severity, message, value, time_str, timestamp):
+    return {"severity": severity, "message": message, "value": value, "time": time_str, "timestamp": timestamp}
 
 
 def compute_machine_status(clean, esp32_connected, alarms):
@@ -256,7 +256,7 @@ def process_reading(clean, source):
     machine_status = compute_machine_status(clean, esp32_connected, alarms)
 
     reading = {
-        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
         "T1": clean.get("T1"), "T2": clean.get("T2"), "T3": clean.get("T3"),
         "T4": clean.get("T4"), "T5": clean.get("T5"), "T6": clean.get("T6"),
         "flow_rate": clean.get("flow_rate"),
@@ -268,7 +268,7 @@ def process_reading(clean, source):
         "cop": cop,
         "source": source,
         "machine_status": machine_status,
-        "mode": "DEMO" if source == "DEMO" else "LIVE",
+        "mode": "LIVE",
     }
 
     insert_reading(reading, source=source)
@@ -277,7 +277,7 @@ def process_reading(clean, source):
         STATE["last_reading"] = reading
         STATE["active_alarms"] = alarms
         if source == "LIVE":
-            STATE["last_esp32_time"] = datetime.now()
+            STATE["last_esp32_time"] = datetime.now(timezone.utc)
             STATE["demo_mode"] = False
 
     broadcast_sse({"type": "reading", "data": reading, "alarms": alarms})
@@ -288,7 +288,7 @@ def is_esp32_connected():
     last = STATE.get("last_esp32_time")
     if last is None:
         return False
-    return (datetime.now() - last).total_seconds() <= config.ESP32_TIMEOUT_SECONDS
+    return (datetime.now(timezone.utc) - last).total_seconds() <= config.ESP32_TIMEOUT_SECONDS
 
 
 # ------------------------------------------------------------------
@@ -380,8 +380,8 @@ def api_latest():
         "demo_mode": demo_mode,
         "backend_status": "ONLINE",
         "esp32_status": "CONNECTED" if esp32_connected else "DISCONNECTED",
-        "last_esp32_time": last_esp32.strftime("%H:%M:%S") if last_esp32 else None,
-        "server_time": datetime.now().strftime("%H:%M:%S"),
+        "last_esp32_time": last_esp32.isoformat(timespec="seconds").replace("+00:00", "Z") if last_esp32 else None,
+        "server_time": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
     })
 
 
@@ -394,6 +394,7 @@ def api_history():
     """
     range_key = request.args.get("range", "1hour")
     limit = request.args.get("limit", default=2000, type=int)
+    source = request.args.get("source")
 
     ranges = {
         "1min": timedelta(minutes=1),
@@ -406,16 +407,18 @@ def api_history():
     }
 
     conn = get_db()
+    source_clause = " AND source = ?" if source in ("LIVE", "DEMO") else ""
     if range_key == "all":
         cur = conn.execute(
-            "SELECT * FROM readings ORDER BY id DESC LIMIT ?", (limit,)
+            f"SELECT * FROM readings WHERE 1=1{source_clause} ORDER BY id DESC LIMIT ?",
+            ((source, limit) if source_clause else (limit,)),
         )
     else:
         delta = ranges.get(range_key, timedelta(hours=1))
-        since = (datetime.now() - delta).isoformat(timespec="seconds")
+        since = (datetime.now(timezone.utc) - delta).isoformat(timespec="seconds").replace("+00:00", "Z")
         cur = conn.execute(
-            "SELECT * FROM readings WHERE timestamp >= ? ORDER BY id DESC LIMIT ?",
-            (since, limit),
+            f"SELECT * FROM readings WHERE timestamp >= ?{source_clause} ORDER BY id DESC LIMIT ?",
+            ((since, source, limit) if source_clause else (since, limit)),
         )
     rows = [dict(r) for r in cur.fetchall()]
     conn.close()
@@ -450,12 +453,10 @@ def api_config():
 
 @app.route("/api/config/demo_mode", methods=["POST"])
 def api_set_demo_mode():
-    """Allow the UI to force demo mode on/off."""
-    payload = request.get_json(force=True, silent=True) or {}
-    enabled = bool(payload.get("enabled", False))
+    """Keep the legacy endpoint compatible while disabling fake readings."""
     with STATE_LOCK:
-        STATE["demo_mode"] = enabled
-    return jsonify({"status": "ok", "demo_mode": enabled})
+        STATE["demo_mode"] = False
+    return jsonify({"status": "ok", "demo_mode": False})
 
 
 @app.route("/api/export/excel")
@@ -471,7 +472,7 @@ def api_export_excel():
     start_param = request.args.get("start")
     end_param = request.args.get("end")
 
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     if range_key == "today":
         since = now.replace(hour=0, minute=0, second=0, microsecond=0)
         until = now
@@ -512,60 +513,7 @@ def api_export_excel():
     )
 
 
-# ------------------------------------------------------------------
-# DEMO MODE BACKGROUND GENERATOR
-# ------------------------------------------------------------------
-class DemoSimulator:
-    """
-    Generates smoothly-changing (not jumpy) simulated sensor values by
-    slowly random-walking within the configured ranges.
-    """
-
-    def __init__(self):
-        self.values = {}
-        for key, (lo, hi) in config.DEMO_RANGES.items():
-            self.values[key] = (lo + hi) / 2.0
-        self.compressor_status = True
-
-    def step(self):
-        for key, (lo, hi) in config.DEMO_RANGES.items():
-            span = hi - lo
-            step = span * 0.03  # small smooth step
-            current = self.values[key]
-            current += random.uniform(-step, step)
-            current = max(lo, min(hi, current))
-            self.values[key] = current
-
-        # occasionally toggle compressor (rare, keeps demo realistic)
-        if random.random() < 0.01:
-            self.compressor_status = not self.compressor_status
-
-        clean = {k: round(v, 2) for k, v in self.values.items()}
-        clean["compressor_status"] = self.compressor_status
-        return clean
-
-
-def demo_mode_worker():
-    sim = DemoSimulator()
-    while True:
-        time.sleep(config.DEMO_MODE_INTERVAL_SECONDS)
-        with STATE_LOCK:
-            demo_on = STATE["demo_mode"]
-        if demo_on:
-            clean = sim.step()
-            process_reading(clean, source="DEMO")
-
-
-# ------------------------------------------------------------------
-# STARTUP
-# ------------------------------------------------------------------
-def start_background_threads():
-    t = threading.Thread(target=demo_mode_worker, daemon=True)
-    t.start()
-
-
 init_db()
-start_background_threads()
 
 if __name__ == "__main__":
     app.run(host=config.HOST, port=config.PORT, debug=config.DEBUG, threaded=True)

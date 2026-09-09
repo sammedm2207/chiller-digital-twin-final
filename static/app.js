@@ -10,8 +10,34 @@ const API = {
   config: "/api/config",
   stream: "/api/stream",
   exportExcel: "/api/export/excel",
-  demoMode: "/api/config/demo_mode",
 };
+
+const DISPLAY_TIME_ZONE = "Asia/Kolkata";
+
+function parseTimestamp(value) {
+  if (!value) return null;
+  const text = String(value);
+  const hasTimeZone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(text);
+  const date = new Date(hasTimeZone ? text : `${text}Z`);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function formatIstTime(value) {
+  const date = parseTimestamp(value);
+  return date ? new Intl.DateTimeFormat("en-IN", {
+    timeZone: DISPLAY_TIME_ZONE,
+    hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+  }).format(date) : "--:--:--";
+}
+
+function formatIstDateTime(value) {
+  const date = parseTimestamp(value);
+  return date ? `${new Intl.DateTimeFormat("en-IN", {
+    timeZone: DISPLAY_TIME_ZONE,
+    day: "2-digit", month: "2-digit", year: "numeric",
+    hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true,
+  }).format(date)} IST` : "--";
+}
 
 let CFG = null;                 // cached /api/config response
 let liveChart = null;           // Chart.js instance for the dashboard live graph
@@ -20,6 +46,7 @@ let analyticsRange = "1hour";
 let analyticsCharts = {};       // { COP: chart, Cap: chart, Power: chart, DT: chart, Temps: chart }
 let newestReadingTimestamp = "";
 let sseRetryTimer = null;
+let activeView = "dashboard";
 
 const SENSOR_KEYS = ["T1", "T2", "T3", "T4", "T5", "T6"];
 const SENSOR_COLORS = {
@@ -49,7 +76,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   setupLiveRangeButtons();
   setupAnalyticsRangeButtons();
   setupReportButtons();
-  setupDemoToggle();
   tickClock();
   setInterval(tickClock, 1000);
 
@@ -79,6 +105,7 @@ function setupNav() {
       document.querySelectorAll(".nav-item").forEach((b) => b.classList.remove("active"));
       btn.classList.add("active");
       const view = btn.dataset.view;
+      activeView = view;
       document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
       document.getElementById("view-" + view).classList.add("active");
 
@@ -92,8 +119,7 @@ function setupNav() {
 }
 
 function tickClock() {
-  const now = new Date();
-  document.getElementById("clock").textContent = now.toLocaleTimeString("en-GB");
+  document.getElementById("clock").textContent = formatIstTime(new Date().toISOString());
 }
 
 /* ---------------------------------------------------------
@@ -105,7 +131,6 @@ async function loadConfig() {
   document.getElementById("institutionName").textContent = CFG.institution;
   document.getElementById("projectSubtitle").textContent = CFG.project_subtitle;
   document.title = CFG.project_title + " | " + CFG.institution;
-  document.getElementById("demoToggle").checked = !!CFG.demo_mode;
   if (window.ChillerTwin && typeof window.ChillerTwin.setConfig === "function") {
     window.ChillerTwin.setConfig(CFG);
   }
@@ -162,16 +187,6 @@ function buildSettingsView() {
     <div class="mapping-row"><span class="m-key">Water Cp</span><span class="m-val">${CFG.water_cp} kJ/kg&middot;K</span></div>
     <div class="mapping-row"><span class="m-key">ESP32 Timeout</span><span class="m-val">${CFG.esp32_timeout} s</span></div>
   `;
-}
-
-function setupDemoToggle() {
-  document.getElementById("demoToggle").addEventListener("change", async (e) => {
-    await fetch(API.demoMode, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ enabled: e.target.checked }),
-    });
-  });
 }
 
 /* ---------------------------------------------------------
@@ -435,12 +450,10 @@ function renderReading(reading, alarms) {
   document.getElementById("flowValue").textContent = fmtVal(reading.flow_rate, "L/min");
   document.getElementById("compValue").textContent = reading.compressor_status ? "RUNNING" : "STOPPED";
 
-  const modeTag = reading.mode === "DEMO" ? "SIMULATED" : "CALCULATED";
-  const tagClass = reading.mode === "DEMO" ? "tag demo" : "tag";
-  document.getElementById("copTag").textContent = modeTag;
-  document.getElementById("copTag").className = tagClass;
-  document.getElementById("capTag").textContent = modeTag;
-  document.getElementById("capTag").className = tagClass;
+  document.getElementById("copTag").textContent = "CALCULATED";
+  document.getElementById("copTag").className = "tag";
+  document.getElementById("capTag").textContent = "CALCULATED";
+  document.getElementById("capTag").className = "tag";
 
   // Temperature cards
   const worstSeverity = alarms.reduce((acc, a) => {
@@ -455,7 +468,7 @@ function renderReading(reading, alarms) {
     const cardEl = document.getElementById("tempCard-" + key);
     if (!valEl) return;
     valEl.textContent = fmtVal(reading[key], "°C");
-    timeEl.textContent = reading.timestamp ? new Date(reading.timestamp).toLocaleTimeString("en-GB") : "--:--:--";
+    timeEl.textContent = formatIstTime(reading.timestamp);
 
     let status = "normal";
     const relevantAlarm = alarms.find((a) => a.message.includes(sensorAlarmHint(key)));
@@ -472,19 +485,14 @@ function renderReading(reading, alarms) {
 
   // Mode pill
   const pill = document.getElementById("modePill");
-  if (reading.mode === "DEMO") {
-    pill.textContent = "● DEMO MODE";
-    pill.className = "mode-pill demo";
-  } else {
-    pill.textContent = "● LIVE MODE";
-    pill.className = "mode-pill live";
-  }
+  pill.textContent = "● LIVE MODE";
+  pill.className = "mode-pill live";
 
   // Machine status
   setMachineStatusBadge(reading.machine_status);
 
   document.getElementById("lastUpdate").textContent =
-    reading.timestamp ? new Date(reading.timestamp).toLocaleTimeString("en-GB") : "--:--:--";
+    formatIstTime(reading.timestamp);
 
   // 3D Digital Twin (reuses this same computed reading — no duplicate calculations)
   if (window.ChillerTwin && typeof window.ChillerTwin.updateReading === "function") {
@@ -520,7 +528,7 @@ function renderAlarms(alarms) {
       <div class="alarm-sev sev-${a.severity}">${a.severity}</div>
       <div class="alarm-msg">${a.message}</div>
       <div class="alarm-val">${a.value}</div>
-      <div class="alarm-time">${a.time}</div>
+      <div class="alarm-time">${a.timestamp ? formatIstTime(a.timestamp) : a.time}</div>
     </div>`).join("");
 }
 
@@ -538,6 +546,7 @@ async function refreshLatest() {
     if (data.reading && acceptReading(data.reading)) {
       renderReading(data.reading, data.alarms || []);
     }
+    if (activeView === "analytics") loadAnalytics();
   } catch (e) {
     setChip("backendChip", false, "BACKEND", "OFFLINE");
   }
@@ -632,11 +641,11 @@ function formatMetricNumber(value, digits = 2) {
 }
 
 function formatAnalyticsDate(dateValue, range) {
-  const dt = new Date(dateValue);
-  if (Number.isNaN(dt.getTime())) return "--";
-  const timeFormatter = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false });
-  const dayFormatter = new Intl.DateTimeFormat("en-GB", { weekday: "short" });
-  const shortDateFormatter = new Intl.DateTimeFormat("en-GB", { month: "short", day: "numeric" });
+  const dt = parseTimestamp(dateValue);
+  if (!dt) return "--";
+  const timeFormatter = new Intl.DateTimeFormat("en-GB", { timeZone: DISPLAY_TIME_ZONE, hour: "2-digit", minute: "2-digit", hour12: false });
+  const dayFormatter = new Intl.DateTimeFormat("en-GB", { timeZone: DISPLAY_TIME_ZONE, weekday: "short" });
+  const shortDateFormatter = new Intl.DateTimeFormat("en-GB", { timeZone: DISPLAY_TIME_ZONE, month: "short", day: "numeric" });
 
   if (range === "1hour" || range === "24hour") return timeFormatter.format(dt);
   if (range === "7day") return dayFormatter.format(dt);
@@ -703,11 +712,11 @@ function getOperatingCondition(key, value) {
   return "Normal";
 }
 
-function renderAnalyticsStatusIndicator(isDemoMode) {
+function renderAnalyticsStatusIndicator(connected) {
   const el = document.getElementById("analyticsStatus");
   if (!el) return;
-  const active = isDemoMode ? "dot-yellow" : "dot-green";
-  const label = isDemoMode ? "Demo Data" : "Live Data";
+  const active = connected ? "dot-green" : "dot-red";
+  const label = connected ? "LIVE DATA" : "ESP32 DISCONNECTED";
   el.innerHTML = `<span class="dot ${active}"></span> ${label}`;
 }
 
@@ -872,15 +881,7 @@ function getAnalyticsChartOptions(config = {}) {
           title: (items) => {
             if (!items?.length) return "";
             const raw = items[0].label;
-            return raw ? new Date(raw).toLocaleString("en-GB", {
-              day: "2-digit",
-              month: "short",
-              year: "numeric",
-              hour: "2-digit",
-              minute: "2-digit",
-              second: "2-digit",
-              hour12: false,
-            }) : "";
+            return raw ? formatIstDateTime(raw) : "";
           },
           label: (ctx) => {
             const unit = config.unit || "";
@@ -909,7 +910,7 @@ function setupLiveRangeButtons() {
 async function loadLiveHistory() {
   const res = await fetch(`${API.history}?range=${liveRange}&limit=${CFG?.max_live_points || 720}`);
   const data = await res.json();
-  const labels = data.rows.map((r) => new Date(r.timestamp).toLocaleTimeString("en-GB"));
+  const labels = data.rows.map((r) => formatIstTime(r.timestamp));
   liveChart.data.labels = labels;
   SENSOR_KEYS.forEach((k, i) => {
     liveChart.data.datasets[i].data = data.rows.map((r) => r[k]);
@@ -920,7 +921,7 @@ async function loadLiveHistory() {
 function pushLivePoint(reading) {
   if (!liveChart) return;
   const maxPts = CFG?.max_live_points || 720;
-  liveChart.data.labels.push(new Date(reading.timestamp).toLocaleTimeString("en-GB"));
+  liveChart.data.labels.push(formatIstTime(reading.timestamp));
   SENSOR_KEYS.forEach((k, i) => {
     liveChart.data.datasets[i].data.push(reading[k]);
   });
@@ -946,8 +947,12 @@ function setupAnalyticsRangeButtons() {
 }
 
 async function loadAnalytics() {
-  const res = await fetch(`${API.history}?range=${analyticsRange}&limit=5000`);
-  const data = await res.json();
+  const [historyRes, latestRes] = await Promise.all([
+    fetch(`${API.history}?range=${analyticsRange}&source=LIVE&limit=5000`),
+    fetch(API.latest),
+  ]);
+  const data = await historyRes.json();
+  const latest = await latestRes.json();
   const rows = data.rows || [];
   const labels = rows.map((r) => r.timestamp);
 
@@ -966,9 +971,7 @@ async function loadAnalytics() {
     range: analyticsRange, yTitle: "°C", unit: "°C", digits: 1, fill: false, legend: true, singleMetric: false,
   });
 
-  const currentSummary = rows.length ? rows[rows.length - 1] : null;
-  const isDemo = Boolean(CFG?.demo_mode || (currentSummary && currentSummary.mode === "DEMO"));
-  renderAnalyticsStatusIndicator(isDemo);
+  renderAnalyticsStatusIndicator(latest.esp32_status === "CONNECTED");
 }
 
 /* ---------------------------------------------------------
@@ -999,7 +1002,7 @@ async function loadRecentTable() {
   const tbody = document.getElementById("recentTableBody");
   tbody.innerHTML = rows.map((r) => `
     <tr>
-      <td>${new Date(r.timestamp).toLocaleTimeString("en-GB")}</td>
+      <td>${formatIstDateTime(r.timestamp)}</td>
       <td>${fmtCell(r.T1)}</td><td>${fmtCell(r.T2)}</td><td>${fmtCell(r.T3)}</td>
       <td>${fmtCell(r.T4)}</td><td>${fmtCell(r.T5)}</td><td>${fmtCell(r.T6)}</td>
       <td>${fmtCell(r.flow_rate)}</td><td>${fmtCell(r.power_kw)}</td>

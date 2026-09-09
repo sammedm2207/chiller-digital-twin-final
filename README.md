@@ -26,17 +26,12 @@ http://localhost:5000
 The SQLite database (`chiller.db`) is created automatically on first run —
 no manual setup needed.
 
-## 3. Demo Mode (for presentations without a real chiller)
+## 3. Live Data Mode
 
-Demo mode is **ON by default** so the dashboard has data immediately. It
-generates smoothly-changing, realistic values and clearly labels itself
-**● DEMO MODE** in the sidebar and **SIMULATED** on calculated cards.
-
-- It turns itself **OFF automatically** the instant a real ESP32 packet
-  arrives at `/api/data`.
-- You can also force it on/off from the **Settings** page in the dashboard
-  (checkbox: "Force Demo Mode"), or by calling:
-  `POST /api/config/demo_mode  {"enabled": true}`
+The dashboard starts empty and waits for a real ESP32 packet. No generated,
+random, or sample readings are created when the ESP32 is disconnected.
+Dashboard, Analytics, and Reports all use the readings received at
+`POST /api/data` and stored in SQLite.
 
 ## 4. Connecting the real ESP32
 
@@ -54,9 +49,8 @@ generates smoothly-changing, realistic values and clearly labels itself
 5. Make sure the ESP32 and the PC are on the **same Wi-Fi network**.
 6. Flash the sketch and open the Serial Monitor (115200 baud) to confirm
    it connects to Wi-Fi and successfully POSTs data (HTTP 200 response).
-7. As soon as the backend receives a real packet, the dashboard switches
-   from DEMO MODE to LIVE MODE automatically, and the ESP32 status chip
-   turns green ("CONNECTED").
+7. As soon as the backend receives a real packet, the dashboard displays the
+   live reading and the ESP32 status chip turns green ("CONNECTED").
 
 The `.ino` file's `readT1()` ... `readPower()` functions currently return
 **placeholder example values** — they are clearly marked with `TODO` and
@@ -73,7 +67,6 @@ Everything is centralized in **`config.py`**:
 - `ALARM_THRESHOLDS` — every alarm trip point in one place
 - `WATER_DENSITY_KG_M3`, `WATER_CP_KJ_KGK` — COP calculation constants
 - `ESP32_TIMEOUT_SECONDS` — how long before ESP32 shows DISCONNECTED
-- `DEMO_RANGES` — the value ranges used by the demo-mode simulator
 
 Edit the file and restart `python app.py` for changes to take effect.
 
@@ -120,7 +113,7 @@ CUSTOM**. Each file (`Chiller_Historical_Data_YYYY-MM-DD.xlsx`) contains:
 | GET | `/api/history?range=1min\|5min\|15min\|1hour\|24hour\|7day\|30day\|all` | Historical rows |
 | GET | `/api/alarms` | Currently active alarms |
 | GET | `/api/config` | Machine info, sensor labels, thresholds, constants |
-| POST | `/api/config/demo_mode` | Force demo mode on/off |
+| POST | `/api/config/demo_mode` | Legacy compatibility endpoint; demo generation is disabled |
 | GET | `/api/stream` | Server-Sent Events real-time feed |
 | GET | `/api/export/excel?range=today\|24hour\|7day\|30day\|custom` | Download Excel report |
 

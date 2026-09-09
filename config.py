@@ -72,14 +72,8 @@ WATER_OUTLET_SENSOR = "T6"
 # dashboard will mark the ESP32 as DISCONNECTED.
 ESP32_TIMEOUT_SECONDS = 10
 
-# How often (seconds) the demo-mode data generator pushes a new
-# simulated reading when DEMO_MODE is enabled.
-DEMO_MODE_INTERVAL_SECONDS = 2
-
-# Demo mode is automatically enabled at startup if no real ESP32
-# data has been received. It automatically turns off the moment a
-# real packet arrives, and can also be forced on/off via /api/config.
-DEMO_MODE_DEFAULT = True
+# Production starts empty until a real ESP32 packet is received.
+DEMO_MODE_DEFAULT = False
 
 # ------------------------------------------------------------------
 # ALARM THRESHOLDS
@@ -95,21 +89,6 @@ ALARM_THRESHOLDS = {
     "LOW_COP_WARNING": 2.5,     # below this COP = warning
     "HIGH_POWER_WARNING": 12.0,  # kW
     "HIGH_POWER_CRITICAL": 15.0,  # kW
-}
-
-# ------------------------------------------------------------------
-# DEMO MODE SIMULATION RANGES
-# ------------------------------------------------------------------
-DEMO_RANGES = {
-    "T1": (8.0, 15.0),
-    "T2": (65.0, 85.0),
-    "T3": (30.0, 40.0),
-    "T4": (2.0, 6.0),
-    "T5": (14.0, 18.0),
-    "T6": (9.0, 13.0),
-    "flow_rate": (100.0, 140.0),
-    "power_kw": (6.0, 11.0),
-    "compressor_current": (14.0, 22.0),
 }
 
 # ------------------------------------------------------------------
